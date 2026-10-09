@@ -1,37 +1,77 @@
 
 from pathlib import Path
+from datetime import datetime
 
 from reportlab.lib import colors
-from reportlab.lib.pagesizes import landscape, A4
+from reportlab.lib.pagesizes import A4, landscape
 from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfgen import canvas
-from reportlab.lib.utils import ImageReader
 
 
 OUTPUT_DIR = Path("generated_certificates")
 
-# Optional organization logo. If the file doesn't exist, a clean
-# placeholder will be displayed instead.
-LOGO_PATH = Path("assets/logo.png")
-
-# Design palette
-BACKGROUND = colors.HexColor("#FFFEFC")
-TERRACOTTA = colors.HexColor("#B7654E")
-TERRACOTTA_LIGHT = colors.HexColor("#E9D3CA")
-CHARCOAL = colors.HexColor("#292927")
-SECONDARY = colors.HexColor("#77736F")
-MUTED = colors.HexColor("#A7A09A")
+# Corporate terracotta palette
+TERRACOTTA = colors.HexColor("#B65F45")
+TERRACOTTA_DARK = colors.HexColor("#8E4432")
+CHARCOAL = colors.HexColor("#292B2C")
+BODY_TEXT = colors.HexColor("#5F605F")
+MUTED_TEXT = colors.HexColor("#85817D")
+PAPER = colors.HexColor("#FCFAF7")
+BORDER = colors.HexColor("#E7DED7")
 WHITE = colors.white
 
 
-def fit_font_size(text, font_name, max_size, max_width, min_size=10):
-    """Return a font size that keeps text within its available width."""
+def _fit_font_size(text, font_name, max_size, min_size, max_width):
+    """Choose a font size that keeps a single line within max_width."""
     size = max_size
 
     while size > min_size and stringWidth(text, font_name, size) > max_width:
         size -= 1
 
-    return max(size, min_size)
+    return size
+
+
+def _wrap_text(text, font_name, font_size, max_width):
+    """Wrap text into lines that fit the available width."""
+    words = text.split()
+    lines = []
+    current_line = ""
+
+    for word in words:
+        candidate = f"{current_line} {word}".strip()
+
+        if stringWidth(candidate, font_name, font_size) <= max_width:
+            current_line = candidate
+        else:
+            if current_line:
+                lines.append(current_line)
+
+            # Split unusually long individual words if necessary.
+            if stringWidth(word, font_name, font_size) > max_width:
+                fragment = ""
+
+                for character in word:
+                    candidate_fragment = fragment + character
+
+                    if (
+                        fragment
+                        and stringWidth(
+                            candidate_fragment, font_name, font_size
+                        ) > max_width
+                    ):
+                        lines.append(fragment)
+                        fragment = character
+                    else:
+                        fragment = candidate_fragment
+
+                current_line = fragment
+            else:
+                current_line = word
+
+    if current_line:
+        lines.append(current_line)
+
+    return lines
 
 
 def generate_certificate(
@@ -41,274 +81,263 @@ def generate_certificate(
     certificate_id: int,
 ) -> str:
     """
-    Generate one minimal, modern landscape A4 certificate.
+    Generate a corporate-style landscape A4 PDF certificate.
 
-    The function signature and return value remain compatible with
-    the existing FastAPI backend.
+    The certificate ID comes from the existing database record ID,
+    so each certificate receives a distinct identifier.
+    Returns the generated PDF's filesystem path as a string.
     """
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     output_path = OUTPUT_DIR / f"certificate_{certificate_id}.pdf"
 
-    page_w, page_h = landscape(A4)
+    page_width, page_height = landscape(A4)
 
     pdf = canvas.Canvas(
         str(output_path),
-        pagesize=(page_w, page_h),
+        pagesize=(page_width, page_height),
     )
 
+    # Metadata
     pdf.setTitle(f"Certificate - {recipient_name}")
     pdf.setAuthor("Certificate Generator")
-    pdf.setSubject(f"Certificate of Completion - {course_name}")
+    pdf.setSubject(f"Certificate of completion: {course_name}")
 
-    # ---------------------------------------------------------
-    # 1. Background and minimal border
-    # ---------------------------------------------------------
-    pdf.setFillColor(BACKGROUND)
-    pdf.rect(0, 0, page_w, page_h, fill=1, stroke=0)
+    # Background
+    pdf.setFillColor(PAPER)
+    pdf.rect(0, 0, page_width, page_height, fill=1, stroke=0)
 
-    # Fine border with a small terracotta accent.
-    margin = 30
+    # Main white content area
+    margin = 25
 
-    pdf.setStrokeColor(TERRACOTTA_LIGHT)
-    pdf.setLineWidth(0.8)
+    pdf.setFillColor(WHITE)
     pdf.rect(
         margin,
         margin,
-        page_w - 2 * margin,
-        page_h - 2 * margin,
-        fill=0,
-        stroke=1,
-    )
-
-    pdf.setFillColor(TERRACOTTA)
-    pdf.rect(
-        margin,
-        margin,
-        4,
-        page_h - 2 * margin,
+        page_width - 2 * margin,
+        page_height - 2 * margin,
         fill=1,
         stroke=0,
     )
 
-    # ---------------------------------------------------------
-    # 2. Organization logo area
-    # ---------------------------------------------------------
-    logo_x = 64
-    logo_y = page_h - 112
-    logo_w = 76
-    logo_h = 45
-
-    if LOGO_PATH.is_file():
-        try:
-            pdf.drawImage(
-                ImageReader(str(LOGO_PATH)),
-                logo_x,
-                logo_y,
-                width=logo_w,
-                height=logo_h,
-                preserveAspectRatio=True,
-                anchor="c",
-                mask="auto",
-            )
-        except Exception:
-            # A bad or unsupported logo should not stop generation.
-            pdf.setStrokeColor(TERRACOTTA_LIGHT)
-            pdf.roundRect(
-                logo_x,
-                logo_y,
-                logo_w,
-                logo_h,
-                5,
-                fill=0,
-                stroke=1,
-            )
-            pdf.setFillColor(SECONDARY)
-            pdf.setFont("Helvetica", 8)
-            pdf.drawCentredString(
-                logo_x + logo_w / 2,
-                logo_y + logo_h / 2 - 3,
-                "YOUR LOGO",
-            )
-    else:
-        pdf.setStrokeColor(TERRACOTTA_LIGHT)
-        pdf.roundRect(
-            logo_x,
-            logo_y,
-            logo_w,
-            logo_h,
-            5,
-            fill=0,
-            stroke=1,
-        )
-
-        pdf.setFillColor(SECONDARY)
-        pdf.setFont("Helvetica", 8)
-        pdf.drawCentredString(
-            logo_x + logo_w / 2,
-            logo_y + logo_h / 2 - 3,
-            "YOUR LOGO",
-        )
-
-    # Small document label.
-    pdf.setFillColor(SECONDARY)
-    pdf.setFont("Helvetica", 8)
-    pdf.drawRightString(
-        page_w - 64,
-        page_h - 83,
-        "CERTIFICATE  /  OF ACHIEVEMENT",
+    # Thin corporate border
+    pdf.setStrokeColor(BORDER)
+    pdf.setLineWidth(1)
+    pdf.rect(
+        margin,
+        margin,
+        page_width - 2 * margin,
+        page_height - 2 * margin,
+        fill=0,
+        stroke=1,
     )
 
-    # ---------------------------------------------------------
-    # 3. Main title
-    # ---------------------------------------------------------
-    center_x = page_w / 2
+    # Terracotta vertical accent bar
+    pdf.setFillColor(TERRACOTTA)
+    pdf.rect(
+        margin,
+        margin,
+        7,
+        page_height - 2 * margin,
+        fill=1,
+        stroke=0,
+    )
+
+    # Small terracotta header accent
+    content_left = 66
+    content_right = page_width - 60
+    content_width = content_right - content_left
 
     pdf.setFillColor(TERRACOTTA)
+    pdf.roundRect(
+        content_left,
+        page_height - 83,
+        48,
+        4,
+        2,
+        fill=1,
+        stroke=0,
+    )
+
+    # Header
+    pdf.setFillColor(CHARCOAL)
     pdf.setFont("Helvetica-Bold", 10)
-    pdf.drawCentredString(
-        center_x,
-        page_h - 165,
+    pdf.drawString(
+        content_left,
+        page_height - 105,
         "CERTIFICATE OF COMPLETION",
     )
 
+    pdf.setFillColor(MUTED_TEXT)
+    pdf.setFont("Helvetica", 8)
+    pdf.drawRightString(
+        content_right,
+        page_height - 105,
+        "ACHIEVEMENT  /  RECOGNITION",
+    )
+
+    # Heading
     pdf.setFillColor(CHARCOAL)
-    pdf.setFont("Helvetica", 13)
+    pdf.setFont("Helvetica-Bold", 29)
     pdf.drawCentredString(
-        center_x,
-        page_h - 194,
+        page_width / 2,
+        page_height - 163,
+        "Certificate",
+    )
+
+    pdf.setFillColor(TERRACOTTA)
+    pdf.setFont("Helvetica-Bold", 11)
+    pdf.drawCentredString(
+        page_width / 2,
+        page_height - 187,
+        "OF ACHIEVEMENT",
+    )
+
+    # Introductory text
+    pdf.setFillColor(BODY_TEXT)
+    pdf.setFont("Helvetica", 11)
+    pdf.drawCentredString(
+        page_width / 2,
+        page_height - 222,
         "This certificate is proudly presented to",
     )
 
-    # ---------------------------------------------------------
-    # 4. Recipient name
-    # ---------------------------------------------------------
+    # Recipient name, dynamically sized for longer names
     recipient_name = " ".join(recipient_name.split())
 
     name_font = "Helvetica-Bold"
-    name_size = fit_font_size(
+    name_size = _fit_font_size(
         recipient_name,
         name_font,
-        max_size=32,
-        max_width=page_w - 150,
-        min_size=16,
+        max_size=27,
+        min_size=15,
+        max_width=content_width - 40,
     )
 
-    pdf.setFillColor(CHARCOAL)
+    pdf.setFillColor(TERRACOTTA_DARK)
     pdf.setFont(name_font, name_size)
     pdf.drawCentredString(
-        center_x,
-        page_h - 244,
+        page_width / 2,
+        page_height - 263,
         recipient_name,
     )
 
-    # Terracotta separator.
-    rule_w = 100
+    # Divider below recipient name
+    divider_width = min(190, content_width * 0.45)
 
-    pdf.setStrokeColor(TERRACOTTA)
-    pdf.setLineWidth(1.5)
+    pdf.setStrokeColor(BORDER)
+    pdf.setLineWidth(1)
     pdf.line(
-        center_x - rule_w / 2,
-        page_h - 260,
-        center_x + rule_w / 2,
-        page_h - 260,
+        page_width / 2 - divider_width / 2,
+        page_height - 278,
+        page_width / 2 + divider_width / 2,
+        page_height - 278,
     )
 
-    # ---------------------------------------------------------
-    # 5. Course or event information
-    # ---------------------------------------------------------
-    pdf.setFillColor(SECONDARY)
-    pdf.setFont("Helvetica", 12)
+    # Course completion statement
+    pdf.setFillColor(BODY_TEXT)
+    pdf.setFont("Helvetica", 11)
     pdf.drawCentredString(
-        center_x,
-        page_h - 292,
-        "For successfully completing",
+        page_width / 2,
+        page_height - 303,
+        "for successfully completing",
     )
 
+    # Course name can occupy multiple lines
     course_name = " ".join(course_name.split())
-
     course_font = "Helvetica-Bold"
-    course_size = fit_font_size(
+    course_size = _fit_font_size(
         course_name,
         course_font,
-        max_size=20,
-        max_width=page_w - 150,
+        max_size=16,
         min_size=11,
+        max_width=content_width - 70,
     )
 
-    pdf.setFillColor(TERRACOTTA)
-    pdf.setFont(course_font, course_size)
-    pdf.drawCentredString(
-        center_x,
-        page_h - 324,
+    course_lines = _wrap_text(
         course_name,
+        course_font,
+        course_size,
+        content_width - 70,
     )
 
-    # Short supporting statement.
-    pdf.setFillColor(SECONDARY)
-    pdf.setFont("Helvetica", 10)
-    pdf.drawCentredString(
-        center_x,
-        page_h - 349,
-        "In recognition of your learning and achievement.",
-    )
+    course_lines = course_lines[:2]
+    course_y = page_height - 328
 
-    # ---------------------------------------------------------
-    # 6. Signature and certificate identification
-    # ---------------------------------------------------------
-    footer_y = 91
+    pdf.setFillColor(CHARCOAL)
+    pdf.setFont(course_font, course_size)
 
-    # Signature area, left.
-    signature_x = 75
-    signature_w = 180
+    for line in course_lines:
+        pdf.drawCentredString(page_width / 2, course_y, line)
+        course_y -= course_size + 5
 
-    pdf.setStrokeColor(MUTED)
-    pdf.setLineWidth(0.7)
+    # Footer separator
+    footer_y = 75
+
+    pdf.setStrokeColor(BORDER)
+    pdf.setLineWidth(0.8)
     pdf.line(
-        signature_x,
-        footer_y + 18,
-        signature_x + signature_w,
-        footer_y + 18,
+        content_left,
+        footer_y + 15,
+        content_right,
+        footer_y + 15,
     )
+
+    # Issue date
+    pdf.setFillColor(MUTED_TEXT)
+    pdf.setFont("Helvetica-Bold", 7)
+    pdf.drawString(content_left, footer_y, "DATE OF ISSUE")
 
     pdf.setFillColor(CHARCOAL)
-    pdf.setFont("Helvetica-Bold", 9)
+    pdf.setFont("Helvetica", 10)
     pdf.drawString(
-        signature_x,
-        footer_y,
-        "Authorized Signature",
+        content_left,
+        footer_y - 17,
+        str(issue_date),
     )
 
-    pdf.setFillColor(SECONDARY)
-    pdf.setFont("Helvetica", 8)
-    pdf.drawString(
-        signature_x,
-        footer_y - 13,
-        "Organization representative",
-    )
+    # Unique certificate identifier
+    try:
+        year = datetime.strptime(str(issue_date), "%Y-%m-%d").year
+    except ValueError:
+        year = datetime.now().year
 
-    # Certificate ID and issue date, right.
-    right_x = page_w - 75
+    unique_id = f"CERT-{year}-{certificate_id:06d}"
 
-    pdf.setFillColor(SECONDARY)
-    pdf.setFont("Helvetica", 8)
+    pdf.setFillColor(MUTED_TEXT)
+    pdf.setFont("Helvetica-Bold", 7)
     pdf.drawRightString(
-        right_x,
-        footer_y + 21,
-        f"ISSUED  {issue_date}",
-    )
-
-    pdf.setFillColor(CHARCOAL)
-    pdf.setFont("Helvetica-Bold", 9)
-    pdf.drawRightString(
-        right_x,
+        content_right,
         footer_y,
-        f"CERTIFICATE ID  /  {certificate_id}",
+        "CERTIFICATE ID",
     )
 
-    # Small terracotta footer accent.
+    pdf.setFillColor(TERRACOTTA_DARK)
+    pdf.setFont("Helvetica-Bold", 10)
+    pdf.drawRightString(
+        content_right,
+        footer_y - 17,
+        unique_id,
+    )
+
+    # Small decorative footer accent
     pdf.setFillColor(TERRACOTTA)
-    pdf.circle(page_w / 2, 55, 2.5, fill=1, stroke=0)
+    pdf.circle(content_left, 40, 2.5, fill=1, stroke=0)
+
+    pdf.setFillColor(MUTED_TEXT)
+    pdf.setFont("Helvetica", 7)
+    pdf.drawString(
+        content_left + 10,
+        37,
+        "OFFICIAL CERTIFICATE OF COMPLETION",
+    )
+
+    pdf.setFillColor(MUTED_TEXT)
+    pdf.drawRightString(
+        content_right,
+        37,
+        "Issued electronically",
+    )
 
     pdf.save()
 
