@@ -5,3 +5,4 @@ __pycache__/
 certificates.db
 generated_certificates/
 .env
+node_modules/
