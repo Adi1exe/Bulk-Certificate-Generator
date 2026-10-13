@@ -390,7 +390,7 @@ function App() {
   return (
     <div className="page">
       <header className="masthead">
-        <span className="wordmark">Certify</span>
+        <span className="wordmark">Bulk Certificate Generator</span>
       </header>
 
       <section className="intro">
