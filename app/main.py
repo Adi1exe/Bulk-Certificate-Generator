@@ -1,14 +1,15 @@
 from contextlib import asynccontextmanager
-from io import BytesIO
+import csv
+from io import BytesIO, StringIO
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
+from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from sqlalchemy.orm import Session
 from .database import Base, engine, get_db
 from .models import CertificateRecord, GenerationJob
-from .schemas import JobAccepted, JobCreate, JobResult, RecipientResult
+from .schemas import JobAccepted, JobCreate, JobResult, RecipientInput, RecipientResult
 from .worker import process_job
 
 @asynccontextmanager
@@ -29,6 +30,115 @@ app.add_middleware(
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+
+@app.post("/api/recipients/preview-csv")
+async def preview_recipients_csv(file: UploadFile = File(...)):
+    """
+    Validate a CSV before a generation job is created.
+    Required headers: name,email (case-insensitive).
+    Duplicate email addresses are flagged after the first occurrence.
+    """
+    if not file.filename or not file.filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=415, detail="Please upload a .csv file")
+
+    raw = await file.read(2 * 1024 * 1024 + 1)
+    if len(raw) > 2 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="CSV file must be 2 MB or smaller")
+
+    try:
+        content = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="CSV must use UTF-8 encoding")
+
+    try:
+        reader = csv.DictReader(StringIO(content))
+        if not reader.fieldnames:
+            raise HTTPException(status_code=422, detail="CSV is empty or missing a header row")
+
+        normalized_headers = {
+            (header or "").strip().lower(): header
+            for header in reader.fieldnames
+        }
+        if "name" not in normalized_headers or "email" not in normalized_headers:
+            raise HTTPException(
+                status_code=422,
+                detail="CSV must include 'name' and 'email' columns",
+            )
+
+        rows = []
+        valid_recipients = []
+        seen_emails = set()
+        row_number = 1  # header row
+
+        for raw_row in reader:
+            row_number += 1
+            if len(rows) >= 5000:
+                raise HTTPException(
+                    status_code=413,
+                    detail="CSV may contain at most 5,000 recipient rows",
+                )
+
+            name = (raw_row.get(normalized_headers["name"]) or "").strip()
+            email = (raw_row.get(normalized_headers["email"]) or "").strip()
+            if not name and not email:
+                continue
+
+            errors = []
+            try:
+                recipient = RecipientInput(name=name, email=email)
+                clean_name = recipient.name
+                clean_email = str(recipient.email)
+            except Exception as exc:
+                # Pydantic validation errors are converted into useful row-level messages.
+                details = getattr(exc, "errors", lambda: [])()
+                if details:
+                    for detail in details:
+                        field = str(detail.get("loc", ["field"])[-1])
+                        message = detail.get("msg", "Invalid value")
+                        errors.append(f"{field}: {message}")
+                else:
+                    errors.append(str(exc))
+
+                clean_name = " ".join(name.split())
+                clean_email = email
+
+            normalized_email = clean_email.casefold()
+            if not errors and normalized_email in seen_emails:
+                errors.append("email: duplicate email address in this CSV")
+            elif not errors:
+                seen_emails.add(normalized_email)
+
+            status = "valid" if not errors else "invalid"
+            row_result = {
+                "row_number": row_number,
+                "name": clean_name,
+                "email": clean_email,
+                "status": status,
+                "errors": errors,
+            }
+            rows.append(row_result)
+
+            if status == "valid":
+                valid_recipients.append({"name": clean_name, "email": clean_email})
+
+    except csv.Error as exc:
+        raise HTTPException(status_code=400, detail=f"Could not parse CSV: {exc}")
+
+    if not rows:
+        raise HTTPException(status_code=422, detail="CSV contains no recipient rows")
+
+    invalid_count = sum(1 for row in rows if row["status"] == "invalid")
+    return {
+        "filename": file.filename,
+        "total_rows": len(rows),
+        "valid_count": len(valid_recipients),
+        "invalid_count": invalid_count,
+        "valid_recipients": valid_recipients,
+        "rows": rows,
+    }
+
 
 @app.post("/api/jobs", response_model=JobAccepted, status_code=202)
 def create_job(payload: JobCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):

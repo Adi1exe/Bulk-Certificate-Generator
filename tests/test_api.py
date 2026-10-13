@@ -115,3 +115,53 @@ def test_download_job_zip_without_successes_returns_409(client, monkeypatch):
 
     archive_response = client.get(f"/api/jobs/{job_id}/download-zip")
     assert archive_response.status_code == 409
+
+
+def test_csv_preview_validates_rows_and_detects_duplicates(client):
+    csv_content = (
+        "name,email\n"
+        "Ada Lovelace,ada@example.com\n"
+        "Grace Hopper,grace@example.com\n"
+        "Duplicate Ada,ada@example.com\n"
+        "Bad Person,not-an-email\n"
+        ",\n"
+    )
+    response = client.post(
+        "/api/recipients/preview-csv",
+        files={"file": ("recipients.csv", csv_content.encode(), "text/csv")},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total_rows"] == 4
+    assert data["valid_count"] == 2
+    assert data["invalid_count"] == 2
+    assert [r["name"] for r in data["valid_recipients"]] == ["Ada Lovelace", "Grace Hopper"]
+    assert data["rows"][2]["status"] == "invalid"
+    assert "duplicate email" in data["rows"][2]["errors"][0]
+    assert data["rows"][3]["status"] == "invalid"
+
+
+def test_csv_preview_requires_name_and_email_headers(client):
+    response = client.post(
+        "/api/recipients/preview-csv",
+        files={"file": ("recipients.csv", b"full_name,email\nAda,ada@example.com\n", "text/csv")},
+    )
+    assert response.status_code == 422
+    assert "name" in response.json()["detail"]
+
+
+def test_csv_preview_rejects_non_csv_file(client):
+    response = client.post(
+        "/api/recipients/preview-csv",
+        files={"file": ("recipients.txt", b"name,email\nAda,ada@example.com\n", "text/plain")},
+    )
+    assert response.status_code == 415
+
+
+def test_csv_preview_accepts_utf8_bom_and_case_insensitive_headers(client):
+    response = client.post(
+        "/api/recipients/preview-csv",
+        files={"file": ("recipients.csv", b"\xef\xbb\xbfName,EMAIL\nAda Lovelace,ada@example.com\n", "text/csv")},
+    )
+    assert response.status_code == 200
+    assert response.json()["valid_count"] == 1
