@@ -1,23 +1,116 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, LoaderCircle, X } from "lucide-react";
 
 const API = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
 
-function formatDate(value) {
-  if (!value) return "—";
-  return new Date(value).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+/* Limits that mirror schemas.py / main.py */
+const MAX_RECIPIENTS = 5000;
+const MIN_NAME = 2;
+const MAX_NAME = 160;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/* Page geometry from certificates.py (A4 landscape, in points) */
+const PAGE_W = 841.89;
+const CONTENT_W = PAGE_W - 66 - 60;
+
+/* ---------- Text measuring (ports _fit_font_size and _wrap_text) ---------- */
+let measureCtx = null;
+
+function textWidth(text, bold, size) {
+  if (!measureCtx) measureCtx = document.createElement("canvas").getContext("2d");
+  measureCtx.font = `${bold ? "bold " : ""}100px Helvetica, Arial, "Liberation Sans", sans-serif`;
+  return (measureCtx.measureText(text).width * size) / 100;
 }
 
-function formatIssueDate(value) {
-  if (!value) return "";
-  const d = new Date(`${value}T00:00:00`);
-  return Number.isNaN(d.getTime())
-    ? ""
-    : d.toLocaleDateString([], { day: "numeric", month: "long", year: "numeric" });
+function fitFontSize(text, bold, max, min, maxWidth) {
+  let size = max;
+  while (size > min && textWidth(text, bold, size) > maxWidth) size -= 1;
+  return size;
+}
+
+function wrapText(text, bold, size, maxWidth) {
+  const lines = [];
+  let current = "";
+  for (const word of text.split(/\s+/).filter(Boolean)) {
+    const candidate = `${current} ${word}`.trim();
+    if (textWidth(candidate, bold, size) <= maxWidth) {
+      current = candidate;
+      continue;
+    }
+    if (current) lines.push(current);
+    if (textWidth(word, bold, size) > maxWidth) {
+      let fragment = "";
+      for (const ch of word) {
+        const next = fragment + ch;
+        if (fragment && textWidth(next, bold, size) > maxWidth) {
+          lines.push(fragment);
+          fragment = ch;
+        } else {
+          fragment = next;
+        }
+      }
+      current = fragment;
+    } else {
+      current = word;
+    }
+  }
+  if (current) lines.push(current);
+  return lines;
+}
+
+function usePreviewLayout(name, course) {
+  return useMemo(() => {
+    const cleanName = name.split(/\s+/).filter(Boolean).join(" ") || "Recipient name";
+    const cleanCourse = course.split(/\s+/).filter(Boolean).join(" ") || "Course or event";
+    const nameSize = fitFontSize(cleanName, true, 27, 15, CONTENT_W - 40);
+    const courseSize = fitFontSize(cleanCourse, true, 16, 11, CONTENT_W - 70);
+    const allLines = wrapText(cleanCourse, true, courseSize, CONTENT_W - 70);
+    return {
+      cleanName,
+      cleanCourse,
+      nameSize,
+      courseSize,
+      lines: allLines.slice(0, 2),
+      cut: allLines.length > 2
+    };
+  }, [name, course]);
+}
+
+/* ---------- Small helpers ---------- */
+function parseServerDate(value) {
+  if (!value) return null;
+  // The API sends UTC, but SQLite drops the timezone, so add it back when missing.
+  const hasZone = /(?:[zZ]|[+-]\d{2}:?\d{2})$/.test(value);
+  const d = new Date(hasZone ? value : `${value}Z`);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function formatDate(value) {
+  const d = parseServerDate(value);
+  return d ? d.toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : "—";
 }
 
 function plural(n, one, many) {
   return `${n} ${n === 1 ? one : many}`;
+}
+
+function parseRecipients(text) {
+  const people = [];
+  text.split("\n").forEach((raw, index) => {
+    const line = raw.trim();
+    if (!line) return;
+    // Split on the last comma, so names like "Smith, John" still work.
+    const comma = line.lastIndexOf(",");
+    const name = (comma < 0 ? line : line.slice(0, comma)).replace(/\s+/g, " ").trim();
+    const email = comma < 0 ? "" : line.slice(comma + 1).trim();
+    const problems = [];
+    if (comma < 0 || !email) problems.push("add an email address after the name");
+    else if (!EMAIL_RE.test(email)) problems.push("that email address doesn't look right");
+    if (name.length < MIN_NAME) problems.push("the name is too short");
+    if (name.length > MAX_NAME) problems.push(`the name is longer than ${MAX_NAME} characters`);
+    people.push({ line: index + 1, name, email, problems });
+  });
+  return people;
 }
 
 function summarize(job) {
@@ -55,6 +148,57 @@ function Status({ status }) {
   return <span className={`status status-${status}`}>{icon}{label}</span>;
 }
 
+/* ---------- Certificate preview: a scaled copy of the real PDF ---------- */
+function CertificatePreview({ layout, issueDate }) {
+  const pt = (n) => `calc(${n} * var(--pt))`;
+  const year = /^\d{4}/.test(issueDate) ? issueDate.slice(0, 4) : String(new Date().getFullYear());
+
+  return (
+    <div
+      className="pdf"
+      role="img"
+      aria-label={`Preview of the certificate for ${layout.cleanName}, for ${layout.cleanCourse}, issued ${issueDate || "on the chosen date"}`}
+    >
+      <div className="pdf-panel" />
+      <div className="pdf-bar" />
+      <div className="pdf-accent" />
+      <p className="pdf-kicker">CERTIFICATE OF COMPLETION</p>
+      <p className="pdf-tag">ACHIEVEMENT  /  RECOGNITION</p>
+      <p className="pdf-title pdf-center">Certificate</p>
+      <p className="pdf-sub pdf-center">OF ACHIEVEMENT</p>
+      <p className="pdf-lead pdf-lead-1 pdf-center">This certificate is proudly presented to</p>
+      <p
+        className="pdf-name pdf-center"
+        style={{ top: pt(263 - 0.8 * layout.nameSize), fontSize: pt(layout.nameSize) }}
+      >
+        {layout.cleanName}
+      </p>
+      <div className="pdf-divider" />
+      <p className="pdf-lead pdf-lead-2 pdf-center">for successfully completing</p>
+      {layout.lines.map((line, i) => (
+        <p
+          key={i}
+          className="pdf-course pdf-center"
+          style={{
+            top: pt(328 + i * (layout.courseSize + 5) - 0.8 * layout.courseSize),
+            fontSize: pt(layout.courseSize)
+          }}
+        >
+          {line}
+        </p>
+      ))}
+      <div className="pdf-rule" />
+      <p className="pdf-label pdf-date-label">DATE OF ISSUE</p>
+      <p className="pdf-value pdf-date-value">{issueDate}</p>
+      <p className="pdf-label pdf-id-label">CERTIFICATE ID</p>
+      <p className="pdf-value pdf-id-value">{`CERT-${year}-######`}</p>
+      <div className="pdf-dot" />
+      <p className="pdf-small pdf-official">OFFICIAL CERTIFICATE OF COMPLETION</p>
+      <p className="pdf-small pdf-electronic">Issued electronically</p>
+    </div>
+  );
+}
+
 function App() {
   const [course, setCourse] = useState("Introduction to Python");
   const [issueDate, setIssueDate] = useState(new Date().toISOString().slice(0, 10));
@@ -63,29 +207,40 @@ function App() {
   const [jobIdInput, setJobIdInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [zipping, setZipping] = useState(false);
+  const [csvLoading, setCsvLoading] = useState(false);
+  const [csvInfo, setCsvInfo] = useState(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const fileRef = useRef(null);
 
-  const parsedRecipients = useMemo(() => recipientText.split("\n").map((line) => line.trim()).filter(Boolean).map((line) => {
-    const comma = line.indexOf(",");
-    if (comma < 0) return { name: line.trim(), email: "" };
-    return { name: line.slice(0, comma).trim(), email: line.slice(comma + 1).trim() };
-  }), [recipientText]);
+  const people = useMemo(() => parseRecipients(recipientText), [recipientText]);
+  const lineProblems = useMemo(() => people.filter((p) => p.problems.length), [people]);
+  const tooMany = people.length > MAX_RECIPIENTS;
+  const canSubmit = people.length > 0 && lineProblems.length === 0 && !tooMany && !loading;
 
+  const layout = usePreviewLayout(people[0]?.name || "", course);
   const progress = job?.progress_percent || 0;
-  const previewName = parsedRecipients[0]?.name || "Recipient name";
-  const previewDate = formatIssueDate(issueDate);
 
   async function api(path, options = {}) {
+    const isForm = options.body instanceof FormData;
     const response = await fetch(`${API}${path}`, {
       ...options,
-      headers: { ...(options.body ? { "Content-Type": "application/json" } : {}), ...options.headers }
+      headers: { ...(options.body && !isForm ? { "Content-Type": "application/json" } : {}), ...options.headers }
     });
     const data = response.headers.get("content-type")?.includes("application/json")
       ? await response.json() : null;
     if (!response.ok) {
       const detail = data?.detail;
-      throw new Error(Array.isArray(detail) ? detail.map((d) => `${d.loc?.slice(-1)[0]}: ${d.msg}`).join("; ") : detail || `Request failed (${response.status})`);
+      if (Array.isArray(detail)) {
+        throw new Error(detail.map((d) => {
+          const loc = d.loc || [];
+          const i = loc.indexOf("recipients");
+          if (i >= 0 && typeof loc[i + 1] === "number") return `Person ${loc[i + 1] + 1}, ${loc[i + 2]}: ${d.msg}`;
+          return `${loc[loc.length - 1]}: ${d.msg}`;
+        }).join("; "));
+      }
+      throw new Error(detail || `Request failed (${response.status})`);
     }
     return data;
   }
@@ -113,10 +268,11 @@ function App() {
 
   async function createJob(event) {
     event.preventDefault();
+    if (!canSubmit) return;
     setLoading(true);
     setError("");
     setNotice("");
-    const recipients = parsedRecipients.map(({ name, email }) => ({ name, email }));
+    const recipients = people.map(({ name, email }) => ({ name, email }));
     try {
       const accepted = await api("/api/jobs", {
         method: "POST",
@@ -132,33 +288,69 @@ function App() {
     }
   }
 
+  async function handleCsv(event) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setCsvLoading(true);
+    setError("");
+    setNotice("");
+    try {
+      const body = new FormData();
+      body.append("file", file);
+      const result = await api("/api/recipients/preview-csv", { method: "POST", body });
+      setCsvInfo({
+        filename: result.filename,
+        valid: result.valid_count,
+        invalid: result.rows.filter((r) => r.status === "invalid")
+      });
+      if (result.valid_recipients.length) {
+        setRecipientText(result.valid_recipients.map((r) => `${r.name}, ${r.email}`).join("\n"));
+      } else {
+        setError("None of the rows in that file could be used.");
+      }
+    } catch (e) {
+      setCsvInfo(null);
+      setError(e.message);
+    } finally {
+      setCsvLoading(false);
+    }
+  }
+
+  async function saveFromApi(path, filename) {
+    const response = await fetch(`${API}${path}`);
+    if (!response.ok) {
+      let message = `Download failed (${response.status})`;
+      try { message = (await response.json()).detail || message; } catch {}
+      throw new Error(message);
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
   async function downloadCertificate(recipient) {
     try {
-      const response = await fetch(`${API}/api/certificates/${recipient.id}/download`);
-      if (!response.ok) {
-        let message = `Download failed (${response.status})`;
-        try { message = (await response.json()).detail || message; } catch {}
-        throw new Error(message);
-      }
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `certificate_${recipient.id}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      await saveFromApi(recipient.download_url || `/api/certificates/${recipient.id}/download`, `certificate_${recipient.id}.pdf`);
     } catch (e) {
       setError(e.message);
     }
   }
 
-  async function downloadAll() {
-    const successful = job?.recipients?.filter((r) => r.status === "succeeded") || [];
-    for (const recipient of successful) {
-      await downloadCertificate(recipient);
-      await new Promise((resolve) => setTimeout(resolve, 250));
+  async function downloadZip() {
+    setZipping(true);
+    try {
+      await saveFromApi(`/api/jobs/${job.id}/download-zip`, `certificates_job_${job.id}.zip`);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setZipping(false);
     }
   }
 
@@ -186,7 +378,13 @@ function App() {
               minLength={2}
               maxLength={200}
               placeholder="Leadership Bootcamp 2026"
+              aria-describedby={layout.cut ? "course-warning" : undefined}
             />
+            {layout.cut && (
+              <p className="hint hint-warn" id="course-warning">
+                That name is too long to fit. The certificate has room for two lines, so the rest would be cut off.
+              </p>
+            )}
           </div>
 
           <div className="field field-date">
@@ -203,7 +401,13 @@ function App() {
 
           <div className="pad-head">
             <label htmlFor="recipients">Who gets a certificate?</label>
-            <span className="count">{plural(parsedRecipients.length, "person", "people")}</span>
+            <span className="pad-tools">
+              <span className="count">{plural(people.length, "person", "people")}</span>
+              <button type="button" className="link-button" onClick={() => fileRef.current?.click()} disabled={csvLoading}>
+                {csvLoading ? "Reading…" : "Upload a CSV"}
+              </button>
+              <input ref={fileRef} type="file" accept=".csv,text/csv" hidden onChange={handleCsv} />
+            </span>
           </div>
           <div className="pad">
             <textarea
@@ -217,7 +421,41 @@ function App() {
               placeholder={"Aarav Sharma, aarav@example.com\nPriya Patel, priya@example.com"}
             />
           </div>
-          <p className="hint" id="recipients-hint">One person per line: name, a comma, then email.</p>
+          <p className="hint" id="recipients-hint">
+            One person per line: name, a comma, then email. Or upload a CSV with name and email columns. You can make up to {MAX_RECIPIENTS.toLocaleString()} at a time.
+          </p>
+
+          {csvInfo && (
+            <div className="notes">
+              <p>
+                Loaded {plural(csvInfo.valid, "person", "people")} from {csvInfo.filename}.
+                {csvInfo.invalid.length > 0 && ` ${plural(csvInfo.invalid.length, "row was", "rows were")} skipped:`}
+              </p>
+              {csvInfo.invalid.length > 0 && (
+                <ul>
+                  {csvInfo.invalid.slice(0, 8).map((r) => (
+                    <li key={r.row_number}>
+                      Row {r.row_number}{r.name ? `, ${r.name}` : ""}: {r.errors.join("; ")}
+                    </li>
+                  ))}
+                  {csvInfo.invalid.length > 8 && <li>…and {csvInfo.invalid.length - 8} more.</li>}
+                </ul>
+              )}
+            </div>
+          )}
+
+          {(lineProblems.length > 0 || tooMany) && (
+            <div className="notes notes-problems">
+              <p>Fix these before you make the certificates:</p>
+              <ul>
+                {tooMany && <li>That's {people.length.toLocaleString()} people. The limit is {MAX_RECIPIENTS.toLocaleString()} per batch.</li>}
+                {lineProblems.slice(0, 5).map((p) => (
+                  <li key={p.line}>Line {p.line}: {p.problems.join(", ")}.</li>
+                ))}
+                {lineProblems.length > 5 && <li>…and {lineProblems.length - 5} more lines.</li>}
+              </ul>
+            </div>
+          )}
 
           {error && (
             <div className="message message-error" role="alert">
@@ -231,7 +469,7 @@ function App() {
             </div>
           )}
 
-          <button className="primary" type="submit" disabled={loading || !parsedRecipients.length}>
+          <button className="primary" type="submit" disabled={!canSubmit}>
             {loading ? <><LoaderCircle className="spin" size={18} aria-hidden="true" /> Starting…</> : "Make certificates"}
           </button>
         </form>
@@ -261,9 +499,14 @@ function App() {
                   <div className="bar-fill" style={{ width: `${progress}%` }} />
                 </div>
                 <p className="batch-summary">{summarize(job)}</p>
-                <p className="quiet small">Started {formatDate(job.created_at)}</p>
+                <p className="quiet small">
+                  Started {formatDate(job.started_at || job.created_at)}
+                  {job.completed_at && ` · Finished ${formatDate(job.completed_at)}`}
+                </p>
                 {job.succeeded > 0 && (
-                  <button type="button" className="secondary" onClick={downloadAll}>Download all PDFs</button>
+                  <button type="button" className="secondary" onClick={downloadZip} disabled={zipping}>
+                    {zipping ? "Preparing ZIP…" : "Download all as ZIP"}
+                  </button>
                 )}
               </>
             )}
@@ -291,18 +534,9 @@ function App() {
 
           <figure className="preview">
             <div className="stack">
-              <div className="sheet">
-                <div className="frame">
-                  <p className="cert-title">Certificate of completion</p>
-                  <p className="cert-lead">Proudly presented to</p>
-                  <p className="cert-name">{previewName}</p>
-                  <p className="cert-lead">for successfully completing</p>
-                  <p className="cert-course">{course || "Course or event"}</p>
-                  <p className="cert-date">Issued {previewDate || "on the date you choose"}</p>
-                </div>
-              </div>
+              <CertificatePreview layout={layout} issueDate={issueDate} />
             </div>
-            <figcaption>Preview, using the first name on your list.</figcaption>
+            <figcaption>Preview of the PDF, using the first name on your list. Each certificate gets its own ID.</figcaption>
           </figure>
         </div>
       </div>
