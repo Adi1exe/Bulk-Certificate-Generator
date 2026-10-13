@@ -326,7 +326,14 @@ function App() {
                     <td className="c-status"><Status status={recipient.status} /></td>
                     <td className="c-action">
                       {recipient.status === "succeeded" ? (
-                        <button type="button" className="link-button" onClick={() => downloadCertificate(recipient)}>Download PDF</button>
+                        <button
+                          type="button"
+                          className="secondary secondary-small"
+                          aria-label={`Download certificate for ${recipient.recipient_name}`}
+                          onClick={() => downloadCertificate(recipient)}
+                        >
+                          Download PDF
+                        </button>
                       ) : recipient.status === "failed" ? (
                         <span className="failure">Couldn't make this one: {recipient.error || "unknown error"}</span>
                       ) : null}

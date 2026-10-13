@@ -1,8 +1,10 @@
-from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
+from io import BytesIO
 from pathlib import Path
+from zipfile import ZIP_DEFLATED, ZipFile
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, Response
 from sqlalchemy.orm import Session
 from .database import Base, engine, get_db
 from .models import CertificateRecord, GenerationJob
@@ -16,13 +18,9 @@ async def lifespan(app: FastAPI):
     yield
 
 app = FastAPI(title="Bulk Certificate Generator", version="1.0.0", lifespan=lifespan)
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -94,6 +92,45 @@ def list_job_certificates(job_id: int, db: Session = Depends(get_db)):
             for r in sorted(job.recipients, key=lambda x: x.id)
         ],
     }
+
+
+@app.get("/api/jobs/{job_id}/download-zip")
+def download_job_zip(job_id: int, db: Session = Depends(get_db)):
+    """Download all successfully generated certificates for a job as one ZIP."""
+    job = db.get(GenerationJob, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Generation job not found")
+
+    successful_records = sorted(
+        (record for record in job.recipients if record.status == "succeeded" and record.file_path),
+        key=lambda record: record.id,
+    )
+    if not successful_records:
+        raise HTTPException(
+            status_code=409,
+            detail="No successfully generated certificates are available to download",
+        )
+
+    archive_buffer = BytesIO()
+    with ZipFile(archive_buffer, mode="w", compression=ZIP_DEFLATED) as archive:
+        for record in successful_records:
+            file_path = Path(record.file_path)
+            if not file_path.is_file():
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Generated PDF is missing for certificate {record.id}",
+                )
+            # Use a server-generated archive name, never a user-supplied filename.
+            archive.write(file_path, arcname=f"certificate_{record.id}.pdf")
+
+    archive_buffer.seek(0)
+    return Response(
+        content=archive_buffer.getvalue(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="certificates_job_{job.id}.zip"'
+        },
+    )
 
 @app.get("/api/certificates/{certificate_id}/download")
 def download_certificate(certificate_id: int, db: Session = Depends(get_db)):

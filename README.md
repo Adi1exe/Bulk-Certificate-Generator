@@ -68,6 +68,14 @@ List certificates associated with a job:
 curl "http://127.0.0.1:8000/api/jobs/1/certificates"
 ```
 
+Download all successfully generated certificates from a job as one ZIP archive:
+
+```bash
+curl -L "http://127.0.0.1:8000/api/jobs/1/download-zip" -o certificates_job_1.zip
+```
+
+The archive includes only successful PDFs. If the job does not exist, the endpoint returns `404`; if no certificates have succeeded yet, it returns `409`.
+
 Download a successful certificate:
 
 ```bash
@@ -130,3 +138,24 @@ Tests use a temporary SQLite database and FastAPI's TestClient. One test replace
   ]
 }
 ```
+
+
+## Frontend (React + Vite)
+
+The `frontend/` directory contains a responsive React dashboard for creating batches, watching live progress, looking up earlier jobs, and downloading successful PDFs.
+
+### Start the frontend
+
+Keep the FastAPI backend running in one terminal, then open a second terminal:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Open `http://localhost:5173`.
+
+By default, the frontend calls `http://127.0.0.1:8000`. To change this, copy `frontend/.env.example` to `frontend/.env` and set `VITE_API_BASE_URL` to your API URL. Restart Vite after changing environment variables.
+
+The API enables CORS for the local Vite development origins (`localhost:5173` and `127.0.0.1:5173`).

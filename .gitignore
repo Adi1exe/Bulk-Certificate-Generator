@@ -6,3 +6,4 @@ certificates.db
 generated_certificates/
 .env
 node_modules/
+New folder/
