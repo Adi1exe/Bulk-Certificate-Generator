@@ -11,38 +11,38 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /* Page geometry from certificates.py (A4 landscape, in points) */
 const PAGE_W = 841.89;
-const CONTENT_W = PAGE_W - 66 - 60;
+const CONTENT_W = PAGE_W - 90 - 90;
 
-/* ---------- Text measuring (ports _fit_font_size and _wrap_text) ---------- */
+/* ---------- Text measuring (ports the helpers in certificates.py) ---------- */
 let measureCtx = null;
 
-function textWidth(text, bold, size) {
+function textWidth(text, italic, size) {
   if (!measureCtx) measureCtx = document.createElement("canvas").getContext("2d");
-  measureCtx.font = `${bold ? "bold " : ""}100px Helvetica, Arial, "Liberation Sans", sans-serif`;
+  measureCtx.font = `${italic ? "italic " : ""}100px "EB Garamond", Georgia, "Times New Roman", serif`;
   return (measureCtx.measureText(text).width * size) / 100;
 }
 
-function fitFontSize(text, bold, max, min, maxWidth) {
+function fitFontSize(text, italic, max, min, maxWidth) {
   let size = max;
-  while (size > min && textWidth(text, bold, size) > maxWidth) size -= 1;
+  while (size > min && textWidth(text, italic, size) > maxWidth) size -= 1;
   return size;
 }
 
-function wrapText(text, bold, size, maxWidth) {
+function wrapText(text, italic, size, maxWidth) {
   const lines = [];
   let current = "";
   for (const word of text.split(/\s+/).filter(Boolean)) {
     const candidate = `${current} ${word}`.trim();
-    if (textWidth(candidate, bold, size) <= maxWidth) {
+    if (textWidth(candidate, italic, size) <= maxWidth) {
       current = candidate;
       continue;
     }
     if (current) lines.push(current);
-    if (textWidth(word, bold, size) > maxWidth) {
+    if (textWidth(word, italic, size) > maxWidth) {
       let fragment = "";
       for (const ch of word) {
         const next = fragment + ch;
-        if (fragment && textWidth(next, bold, size) > maxWidth) {
+        if (fragment && textWidth(next, italic, size) > maxWidth) {
           lines.push(fragment);
           fragment = ch;
         } else {
@@ -58,22 +58,48 @@ function wrapText(text, bold, size, maxWidth) {
   return lines;
 }
 
+function ellipsize(line, italic, size, maxWidth) {
+  let chars = Array.from(line.trimEnd());
+  while (chars.length && textWidth(chars.join("") + "\u2026", italic, size) > maxWidth) {
+    chars = Array.from(chars.slice(0, -1).join("").trimEnd());
+  }
+  return chars.join("") + "\u2026";
+}
+
+/* Re-measure once the web font has loaded, so the preview matches the PDF. */
+function useFontsReady() {
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    let live = true;
+    if (document.fonts?.load) {
+      Promise.all([
+        document.fonts.load('100px "EB Garamond"'),
+        document.fonts.load('italic 100px "EB Garamond"')
+      ]).then(() => live && setTick((t) => t + 1)).catch(() => {});
+    }
+    return () => { live = false; };
+  }, []);
+  return tick;
+}
+
 function usePreviewLayout(name, course) {
+  const fontsTick = useFontsReady();
   return useMemo(() => {
     const cleanName = name.split(/\s+/).filter(Boolean).join(" ") || "Recipient name";
     const cleanCourse = course.split(/\s+/).filter(Boolean).join(" ") || "Course or event";
-    const nameSize = fitFontSize(cleanName, true, 27, 15, CONTENT_W - 40);
-    const courseSize = fitFontSize(cleanCourse, true, 16, 11, CONTENT_W - 70);
-    const allLines = wrapText(cleanCourse, true, courseSize, CONTENT_W - 70);
-    return {
-      cleanName,
-      cleanCourse,
-      nameSize,
-      courseSize,
-      lines: allLines.slice(0, 2),
-      cut: allLines.length > 2
-    };
-  }, [name, course]);
+
+    const nameSize = fitFontSize(cleanName, true, 50, 28, CONTENT_W - 40);
+    const nameWidth = textWidth(cleanName, true, nameSize);
+    const ruleWidth = Math.min(Math.max(nameWidth + 80, 300), CONTENT_W);
+
+    const courseMax = CONTENT_W - 70;
+    const courseSize = fitFontSize(cleanCourse, false, 28, 16, courseMax);
+    let lines = wrapText(cleanCourse, false, courseSize, courseMax);
+    const cut = lines.length > 2;
+    if (cut) lines = [lines[0], ellipsize(lines[1], false, courseSize, courseMax)];
+
+    return { cleanName, cleanCourse, nameSize, ruleWidth, courseSize, lines, cut };
+  }, [name, course, fontsTick]);
 }
 
 /* ---------- Small helpers ---------- */
@@ -88,6 +114,17 @@ function parseServerDate(value) {
 function formatDate(value) {
   const d = parseServerDate(value);
   return d ? d.toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : "—";
+}
+
+const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+
+/* "2026-10-13" becomes "13 October 2026", same as certificates.py */
+function formatIssueDate(value) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value || "");
+  if (!m) return value || "";
+  const month = Number(m[2]);
+  if (month < 1 || month > 12) return value;
+  return `${Number(m[3])} ${MONTHS[month - 1]} ${m[1]}`;
 }
 
 function plural(n, one, many) {
@@ -151,50 +188,46 @@ function Status({ status }) {
 /* ---------- Certificate preview: a scaled copy of the real PDF ---------- */
 function CertificatePreview({ layout, issueDate }) {
   const pt = (n) => `calc(${n} * var(--pt))`;
+  const topOf = (baseline, size) => pt(baseline - 0.85 * size);
   const year = /^\d{4}/.test(issueDate) ? issueDate.slice(0, 4) : String(new Date().getFullYear());
+  const prettyDate = formatIssueDate(issueDate);
 
   return (
     <div
       className="pdf"
       role="img"
-      aria-label={`Preview of the certificate for ${layout.cleanName}, for ${layout.cleanCourse}, issued ${issueDate || "on the chosen date"}`}
+      aria-label={`Preview of the certificate for ${layout.cleanName}, for ${layout.cleanCourse}, issued ${prettyDate || "on the chosen date"}`}
     >
-      <div className="pdf-panel" />
-      <div className="pdf-bar" />
-      <div className="pdf-accent" />
-      <p className="pdf-kicker">CERTIFICATE OF COMPLETION</p>
-      <p className="pdf-tag">ACHIEVEMENT  /  RECOGNITION</p>
-      <p className="pdf-title pdf-center">Certificate</p>
-      <p className="pdf-sub pdf-center">OF ACHIEVEMENT</p>
-      <p className="pdf-lead pdf-lead-1 pdf-center">This certificate is proudly presented to</p>
+      <div className="pdf-frame pdf-frame-outer" />
+      <div className="pdf-frame pdf-frame-inner" />
+      <p className="pdf-center pdf-title">Certificate of completion</p>
+      <p className="pdf-center pdf-lead pdf-lead-1">This certifies that</p>
       <p
-        className="pdf-name pdf-center"
-        style={{ top: pt(263 - 0.8 * layout.nameSize), fontSize: pt(layout.nameSize) }}
+        className="pdf-center pdf-name"
+        style={{ top: topOf(252, layout.nameSize), fontSize: pt(layout.nameSize) }}
       >
         {layout.cleanName}
       </p>
-      <div className="pdf-divider" />
-      <p className="pdf-lead pdf-lead-2 pdf-center">for successfully completing</p>
+      <div className="pdf-name-rule" style={{ width: pt(layout.ruleWidth) }} />
+      <p className="pdf-center pdf-lead pdf-lead-2">has successfully completed</p>
       {layout.lines.map((line, i) => (
         <p
           key={i}
-          className="pdf-course pdf-center"
+          className="pdf-center pdf-course"
           style={{
-            top: pt(328 + i * (layout.courseSize + 5) - 0.8 * layout.courseSize),
+            top: topOf(350 + i * layout.courseSize * 1.2, layout.courseSize),
             fontSize: pt(layout.courseSize)
           }}
         >
           {line}
         </p>
       ))}
-      <div className="pdf-rule" />
-      <p className="pdf-label pdf-date-label">DATE OF ISSUE</p>
-      <p className="pdf-value pdf-date-value">{issueDate}</p>
-      <p className="pdf-label pdf-id-label">CERTIFICATE ID</p>
-      <p className="pdf-value pdf-id-value">{`CERT-${year}-######`}</p>
-      <div className="pdf-dot" />
-      <p className="pdf-small pdf-official">OFFICIAL CERTIFICATE OF COMPLETION</p>
-      <p className="pdf-small pdf-electronic">Issued electronically</p>
+      <div className="pdf-foot-line pdf-foot-left" />
+      <div className="pdf-foot-line pdf-foot-right" />
+      <p className="pdf-value pdf-foot-left">{prettyDate}</p>
+      <p className="pdf-value pdf-value-id pdf-foot-right">{`CERT-${year}-######`}</p>
+      <p className="pdf-label pdf-foot-left">Date issued</p>
+      <p className="pdf-label pdf-foot-right">Certificate no.</p>
     </div>
   );
 }

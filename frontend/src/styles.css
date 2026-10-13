@@ -351,8 +351,9 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 .status-pending { color: var(--ink-soft); }
 
 /* ---------- Certificate preview (mirrors certificates.py) ----------
-   1 PDF point = --pt. Every number below is the same number used in the
-   reportlab code, so the preview scales exactly like the real page. */
+   1 PDF point = --pt. The numbers below are the same ones used in the
+   reportlab code, so the preview scales exactly like the real page.
+   Text tops are written as (baseline - 0.85 * font size). */
 .preview { margin: 0; }
 
 .stack {
@@ -380,10 +381,11 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
   aspect-ratio: 841.89 / 595.28;
   overflow: hidden;
   border: 1px solid var(--rule);
-  background: #fcfaf7;
+  background: #fff;
   box-shadow: 0 10px 20px -14px rgba(26, 40, 64, 0.5);
-  color: #292b2c;
-  font-family: "Helvetica Neue", Helvetica, Arial, "Liberation Sans", sans-serif;
+  color: var(--ink);
+  font-family: "EB Garamond", Georgia, "Times New Roman", serif;
+  font-weight: 400;
 }
 
 .pdf > * {
@@ -395,89 +397,55 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 
 .pdf-center { left: 0; right: 0; text-align: center; }
 
-.pdf-panel {
-  inset: calc(25 * var(--pt));
-  border: 1px solid #e7ded7;
-  background: #fff;
+.pdf-frame { border-style: solid; border-color: var(--ink); }
+.pdf-frame-outer { inset: calc(30 * var(--pt)); border-width: max(1px, calc(1.4 * var(--pt))); }
+.pdf-frame-inner { inset: calc(37 * var(--pt)); border-width: max(0.75px, calc(0.5 * var(--pt))); }
+
+.pdf-title {
+  top: calc((126 - 0.85 * 38) * var(--pt));
+  font-size: calc(38 * var(--pt));
 }
 
-.pdf-bar {
-  top: calc(25 * var(--pt));
-  bottom: calc(25 * var(--pt));
-  left: calc(25 * var(--pt));
-  width: calc(7 * var(--pt));
-  background: #b65f45;
+.pdf-lead {
+  font-size: calc(16 * var(--pt));
+  font-style: italic;
+  color: var(--ink-soft);
+}
+.pdf-lead-1 { top: calc((188 - 0.85 * 16) * var(--pt)); }
+.pdf-lead-2 { top: calc((306 - 0.85 * 16) * var(--pt)); }
+
+.pdf-name { font-style: italic; }
+
+.pdf-name-rule {
+  top: calc(265.7 * var(--pt));
+  left: 50%;
+  height: max(1px, calc(0.6 * var(--pt)));
+  background: var(--ink);
+  transform: translateX(-50%);
 }
 
-.pdf-accent {
-  top: calc(79 * var(--pt));
-  left: calc(66 * var(--pt));
-  width: calc(48 * var(--pt));
-  height: calc(4 * var(--pt));
-  border-radius: calc(2 * var(--pt));
-  background: #b65f45;
-}
+.pdf-foot-left { left: calc(90 * var(--pt)); }
+.pdf-foot-right { left: calc(561.89 * var(--pt)); }
 
-.pdf-kicker {
-  top: calc(97 * var(--pt));
-  left: calc(66 * var(--pt));
-  font-size: calc(10 * var(--pt));
-  font-weight: 700;
-}
-
-.pdf-tag {
-  top: calc(98.6 * var(--pt));
-  right: calc(60 * var(--pt));
-  font-size: calc(8 * var(--pt));
-  color: #85817d;
-}
-
-.pdf-title { top: calc(139.8 * var(--pt)); font-size: calc(29 * var(--pt)); font-weight: 700; }
-.pdf-sub { top: calc(178.2 * var(--pt)); font-size: calc(11 * var(--pt)); font-weight: 700; color: #b65f45; }
-
-.pdf-lead { font-size: calc(11 * var(--pt)); color: #5f605f; }
-.pdf-lead-1 { top: calc(213.2 * var(--pt)); }
-.pdf-lead-2 { top: calc(294.2 * var(--pt)); }
-
-.pdf-name { font-weight: 700; color: #8e4432; }
-.pdf-course { font-weight: 700; }
-
-.pdf-divider {
-  top: calc(278 * var(--pt));
-  left: calc(50% - 95 * var(--pt));
+.pdf-foot-line {
+  top: calc(487.7 * var(--pt));
   width: calc(190 * var(--pt));
-  height: max(1px, var(--pt));
-  background: #e7ded7;
+  height: max(1px, calc(0.6 * var(--pt)));
+  background: var(--ink);
 }
 
-.pdf-rule {
-  bottom: calc(90 * var(--pt));
-  left: calc(66 * var(--pt));
-  right: calc(60 * var(--pt));
-  height: max(1px, calc(0.8 * var(--pt)));
-  background: #e7ded7;
+.pdf-value {
+  top: calc((480 - 0.85 * 16) * var(--pt));
+  font-size: calc(16 * var(--pt));
 }
+.pdf-value-id { color: var(--alert); }
 
-.pdf-label { font-size: calc(7 * var(--pt)); font-weight: 700; color: #85817d; }
-.pdf-value { font-size: calc(10 * var(--pt)); }
-
-.pdf-date-label { bottom: calc(73.6 * var(--pt)); left: calc(66 * var(--pt)); }
-.pdf-date-value { bottom: calc(56 * var(--pt)); left: calc(66 * var(--pt)); }
-.pdf-id-label { bottom: calc(73.6 * var(--pt)); right: calc(60 * var(--pt)); }
-.pdf-id-value { bottom: calc(56 * var(--pt)); right: calc(60 * var(--pt)); font-weight: 700; color: #8e4432; }
-
-.pdf-dot {
-  bottom: calc(37.5 * var(--pt));
-  left: calc(63.5 * var(--pt));
-  width: calc(5 * var(--pt));
-  height: calc(5 * var(--pt));
-  border-radius: 50%;
-  background: #b65f45;
+.pdf-label {
+  top: calc((504 - 0.85 * 12) * var(--pt));
+  font-size: calc(12 * var(--pt));
+  font-style: italic;
+  color: var(--ink-soft);
 }
-
-.pdf-small { bottom: calc(35.6 * var(--pt)); font-size: calc(7 * var(--pt)); color: #85817d; }
-.pdf-official { left: calc(76 * var(--pt)); }
-.pdf-electronic { right: calc(60 * var(--pt)); }
 
 .preview figcaption {
   margin-top: 14px;
